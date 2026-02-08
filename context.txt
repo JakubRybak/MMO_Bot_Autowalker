@@ -1,0 +1,38 @@
+# Project Context: Margonem Minimap Hunter (Final Vision Baseline)
+
+## 1. Project Overview
+External, Python-based automation for Margonem. Uses OpenCV for minimap analysis and PyAutoGUI/Keyboard for input. No memory reading or packet injection.
+
+## 2. Architecture
+*   **`find_all_geometric.py`**: The "Absolute Perfect" vision engine. Combined logic for Monsters and Doors.
+*   **`main.py`**: Central bot logic (State: `last_map`, `ignored_mobs`, `ignored_exits`).
+*   **`vision.py`**: Debug visualizer for real-time tracking.
+*   **`controls.py`**: Mouse/Keyboard input and coordinate translation.
+*   **`ocr.py`**: Tooltip reading via Tesseract.
+
+## 3. The "Geometric" Vision Solution (Standardized)
+This logic has been verified perfectly across 6 different minimap samples.
+
+### **Monster Detection (Green Circles)**
+*   **Question 1: Is it Red?**: Dual Mask (Hue 0-10 & 170-180). Saturation > 70, Value > 70.
+*   **Question 2: Is it Square?**: Aspect Ratio between 0.7 and 1.4.
+*   **Question 3: Is it Solid?**: Extent (Density) > 0.4.
+*   **Filter:** Area 30 to 150 pixels.
+*   **Constraint:** NO morphological processing (preserves crisp square edges).
+
+### **Door Detection (Blue Circles)**
+*   **Question 1: Is it Blue?**: Precision Mask (Hue 110-125). Saturation > 100, Value > 100.
+*   **Question 2: Is it Square/Rect?**: Aspect Ratio between 0.3 and 4.0 (handles edge-squashed rectangles).
+*   **Question 3: Is it Solid?**: Extent (Density) > 0.4.
+*   **Filter:** Area 35 to 200 pixels.
+*   **Processing:** Uses `MORPH_CLOSE` (kernel 3x3) to join fragmented pixels into a solid door shape.
+
+## 4. Combat & Navigation Logic
+*   **Attack Range:** 12px (exactly adjacent).
+*   **Precision Timing:** Arrive -> Wait (1.2s) -> Attack (Q) -> Wait (1.5s).
+*   **Coordinate Memory:** Blacklists every attacked spot for 10 minutes (600s) to handle map noise permanently.
+*   **Map Loop Prevention:** Tracks `last_map` and ignores the exit leading back for 60s.
+
+## 5. Summary of Test Files
+*   `mini_map.png` through `mini_map_6.png` are the testing baseline.
+*   `processed_final_1.png` through `processed_final_6.png` are the perfect result logs.
