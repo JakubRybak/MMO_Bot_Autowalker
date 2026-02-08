@@ -5,7 +5,7 @@ import mss
 
 # --- CONFIGURATION ---
 # UPDATE THIS PATH if you installed Tesseract somewhere else!
-pytesseract.pytesseract.tesseract_cmd = 'C:\\Program Files\\Tesseract-OCR\\tesseract.exe'
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 def read_tooltip(monitor_area, save_path=None):
     """
@@ -19,16 +19,14 @@ def read_tooltip(monitor_area, save_path=None):
         # Convert to grayscale for better OCR
         gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
         
-        # Resize image (2x larger) - Tesseract likes larger text
-        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        # 3x Resize for maximum clarity
+        gray = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
         
-        # Thresholding to make text pop (White text on black background usually)
-        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+        # High Threshold to isolate bright white text (excluding shadows)
+        _, thresh = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
         
-        # Read text (Polish + English)
-        # --psm 3 means "Fully automatic page segmentation, but no OSD"
-        # This proved more reliable than PSM 7 in debug tests
-        text = pytesseract.image_to_string(thresh, lang='pol+eng', config='--psm 3')
+        # Read text using PSM 6 (Uniform block of text)
+        text = pytesseract.image_to_string(thresh, lang='pol+eng', config='--psm 6')
         
         clean_text = text.strip()
         # Remove special chars if needed

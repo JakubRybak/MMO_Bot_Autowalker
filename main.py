@@ -13,11 +13,14 @@ import json
 # --- Configuration ---
 ATTACK_RANGE = 12
 COOLDOWN = 0.5
-ALLOWED_MAPS = ["Kwieciste Kresy", "Krypty Bezsennych", "Błota Sham Al", "Ruiny Tass Zhil", "Las Porywów Wiatru", "Głusza Świstu"]
+ALLOWED_MAPS = ["Kwieciste Kresy", "Krypty Bezsennych p1 s2", "Krypty Bezsennych p2 s2", "Krypty Bezsennych p2 s1", "Błota Sham Al", "Ruiny Tass Zhil", "Las Porywów Wiatru", "Głusza Świstu"]
 
 def clean_text(text):
-    """Removes special characters to make matching easier."""
+    """Removes special characters and fixes common OCR errors (p.l -> p1)."""
     import re
+    # Fix common Tesseract errors found in location_tooltip samples
+    text = text.replace(".l", "1").replace(".1", "1").replace(".2", "2").replace(".s", " s")
+    # Keep only alphanumeric and Polish chars
     return re.sub(r'[^a-zA-Z0-9ąęćłńóśźżĄĘĆŁŃÓŚŹŻ\s]', '', text).strip()
 
 def get_vision_data(sct, monitor):
@@ -260,17 +263,19 @@ def main():
             target_coords = None
             
             for map_name in ALLOWED_MAPS:
-                # Fuzzy match map name in found destinations
+                # Fuzzy match map name: ignore spaces and case
+                search_target = map_name.lower().replace(" ", "")
+                
                 match_key = None
                 for found_name in found_destinations.keys():
-                    if map_name.lower() in found_name.lower():
+                    if search_target in found_name.lower().replace(" ", ""):
                         match_key = found_name
                         break
                 
                 if match_key:
                     selected_map_name = map_name
                     target_coords = found_destinations[match_key]
-                    break # Found highest priority map!
+                    break 
 
             # 3. Action
             if selected_map_name:
