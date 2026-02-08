@@ -4,5 +4,9 @@
         "left": 3,
         "width": 570,
         "height": 562
+    },
+    "heal_pixel": {
+        "x": 990,
+        "y": 961
     }
 }

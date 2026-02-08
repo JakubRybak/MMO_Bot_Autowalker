@@ -8,11 +8,12 @@ from controls import Controller
 import ocr
 import os
 import random
+import json
 
 # --- Configuration ---
 ATTACK_RANGE = 12
 COOLDOWN = 0.5
-ALLOWED_MAPS = ["Kwieciste Kresy", "Błota Sham Al", "Ruiny Tass Zhil", "Las Porywów Wiatru", "Głusza Świstu"]
+ALLOWED_MAPS = ["Kwieciste Kresy", "Krypty Bezsennych", "Błota Sham Al", "Ruiny Tass Zhil", "Las Porywów Wiatru", "Głusza Świstu"]
 
 def clean_text(text):
     """Removes special characters to make matching easier."""
@@ -130,8 +131,18 @@ def main():
     current_target = None
     attack_count = 0
     last_map = ""
+    last_heal_time = 0
     ignored_mobs = {} 
     ignored_exits = {} 
+
+    # Load heal pixel if available
+    heal_px = None
+    if "heal_pixel" in ctrl.region: # Checking the config through controller
+        heal_px = ctrl.region["heal_pixel"]
+    # Wait, Controller only loads map_region. Let's load full config here.
+    with open("config.json", "r") as f:
+        full_config = json.load(f)
+        heal_px = full_config.get("heal_pixel")
 
     with mss.mss() as sct:
         while True:
@@ -140,6 +151,17 @@ def main():
             now = time.time()
             ignored_mobs = {k: v for k, v in ignored_mobs.items() if now - v < 600}
             ignored_exits = {k: v for k, v in ignored_exits.items() if now - v < 60}
+
+            # --- AUTO HEAL CHECK ---
+            if heal_px:
+                # Check if heal is off cooldown
+                if now - last_heal_time > 1.5:
+                    pixel_color = pyautogui.pixel(heal_px["x"], heal_px["y"])
+                    # If red channel is low or green is high, it's not red
+                    if not (pixel_color[0] > 100 and pixel_color[1] < 100):
+                        print(f"\n[!!!] LOW HEALTH detected ({pixel_color}). Healing!")
+                        keyboard.press_and_release('3')
+                        last_heal_time = now
 
             player, mobs, exits = get_vision_data(sct, monitor)
 
@@ -250,13 +272,9 @@ def main():
                     target_coords = found_destinations[match_key]
                     break # Found highest priority map!
 
-            # 3. Action & Queue Rotation
+            # 3. Action
             if selected_map_name:
-                print(f"--> Priority Match! Entering {selected_map_name}.")
-                
-                # Move this map to the END of the queue
-                ALLOWED_MAPS.remove(selected_map_name)
-                ALLOWED_MAPS.append(selected_map_name)
+                print(f"--> Priority Match! Selected: {selected_map_name}.")
                 
                 ctrl.click_map(target_coords[0], target_coords[1])
                 # Blacklist this exit for 60s to prevent immediate turn-back
@@ -269,10 +287,18 @@ def main():
                 
                 if wait_result == "monster":
                     print("--> Walk interrupted by monster. Switching to combat.")
+                    # If interrupted, remove from blacklist so we can try again after combat
+                    if tuple(target_coords) in ignored_exits:
+                        del ignored_exits[tuple(target_coords)]
                 elif not wait_result:
                     print("--> Exploration path timed out or stuck.")
                 else:
-                    print("--> Arrived at exit area. Waiting for map load...")
+                    print(f"--> Arrived at exit for {selected_map_name}. Rotating queue...")
+                    # Move this map to the END of the queue ONLY NOW
+                    ALLOWED_MAPS.remove(selected_map_name)
+                    ALLOWED_MAPS.append(selected_map_name)
+                    
+                    print("--> Waiting for map load...")
                     time.sleep(3) # Short wait for the black screen/loading
             else:
                 print("--> No queue matches found. Waiting...")
