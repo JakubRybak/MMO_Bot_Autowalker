@@ -61,6 +61,6 @@ def find_all(map_path, output_path="processed_all_map.png"):
     print("Result saved to: " + output_path)
 
 if __name__ == "__main__":
-    for i in ["1", "2", "3", "4", "5", "6"]:
+    for i in ["1", "2", "3", "4", "5", "6", "7", "8", "9"]:
         map_file = "mini_map.png" if i=="1" else "mini_map_" + i + ".png"
         find_all(map_file, "processed_final_" + i + ".png")

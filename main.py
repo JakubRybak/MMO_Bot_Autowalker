@@ -12,11 +12,7 @@ import random
 # --- Configuration ---
 ATTACK_RANGE = 12
 COOLDOWN = 0.5
-ALLOWED_MAPS = ["Ghuli Mogilnik", "Fort Eder", "Eder", "Przełęcz Łotrzyków", "Gościniec", "Dolina Rozbójników"]
-
-# Create debug folder if not exists
-if not os.path.exists("debug_scans"):
-    os.makedirs("debug_scans")
+ALLOWED_MAPS = ["Kwieciste Kresy", "Błota Sham Al", "Ruiny Tass Zhil", "Las Porywów Wiatru", "Głusza Świstu"]
 
 def clean_text(text):
     """Removes special characters to make matching easier."""
@@ -51,56 +47,68 @@ def get_vision_data(sct, monitor):
                 player_pos = (x + w//2, y + h//2)
                 break
 
-    # 2. Monsters (Red/Orange) - Perfect Balance V2
-    mask_a = cv2.inRange(hsv, np.array([20, 100, 100]), np.array([32, 255, 255]))
-    mask_b1 = cv2.inRange(hsv, np.array([0, 100, 100]), np.array([10, 255, 255]))
-    mask_b2 = cv2.inRange(hsv, np.array([165, 100, 100]), np.array([180, 255, 255]))
-    mask_mobs = cv2.bitwise_or(mask_a, mask_b1)
-    mask_mobs = cv2.bitwise_or(mask_mobs, mask_b2)
-    mask_mobs = cv2.morphologyEx(mask_mobs, cv2.MORPH_CLOSE, kernel)
+    # 2. Monsters (Red/Orange) - Absolute Perfect Geometric Match
+    lower_red1 = np.array([0, 70, 70])
+    upper_red1 = np.array([10, 255, 255])
+    lower_red2 = np.array([170, 70, 70])
+    upper_red2 = np.array([180, 255, 255])
+    
+    mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+    mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+    mask_mobs = cv2.bitwise_or(mask1, mask2)
+    # NO Morphological Closing for monsters to preserve square shape
 
     if player_pos:
+        # Mask out player area
         cv2.circle(mask_mobs, player_pos, 8, 0, -1) 
     
     contours_m, _ = cv2.findContours(mask_mobs, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     mobs = []
     for cnt in contours_m:
         area = cv2.contourArea(cnt)
-        if 24 < area < 120:
-            x, y, w, h = cv2.boundingRect(cnt)
-            extent = float(area) / (w * h) if w * h > 0 else 0
-            aspect_ratio = float(w)/h
-            if extent > 0.35 and 0.65 < aspect_ratio < 1.35:
-                mobs.append((x + w//2, y + h//2))
+        if 30 < area < 150:
+            x, y, sw, sh = cv2.boundingRect(cnt)
+            aspect_ratio = float(sw)/sh
+            extent = float(area)/(sw*sh)
+            # The "Golden" Geometric Filter
+            if extent > 0.4 and 0.7 <= aspect_ratio <= 1.4:
+                mobs.append((x + sw//2, y + sh//2))
 
-    # 3. Exits (Blue Squares) - Precision Vivid Blue Match
-    # Analysis showed doors use a core of Hue 115, S>100, V>100
-    mask_blue = cv2.inRange(hsv, np.array([110, 100, 100]), np.array([125, 255, 255]))
-    mask_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_CLOSE, kernel)
+    # 3. Exits (Blue Squares) - Absolute Perfect Geometric Match
+    lower_blue = np.array([110, 100, 100])
+    upper_blue = np.array([125, 255, 255])
+    mask_doors = cv2.inRange(hsv, lower_blue, upper_blue)
+    mask_doors = cv2.morphologyEx(mask_doors, cv2.MORPH_CLOSE, kernel)
     
-    contours_e, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours_e, _ = cv2.findContours(mask_doors, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     exits = []
     for cnt in contours_e:
         area = cv2.contourArea(cnt)
-        if 30 < area < 150:
-            x, y, w, h = cv2.boundingRect(cnt)
-            extent = float(area) / (w * h) if w * h > 0 else 0
-            aspect_ratio = float(w)/h
-            # Doors are solid squares
-            if extent > 0.40 and 0.7 < aspect_ratio < 1.3:
-                exits.append((x + w//2, y + h//2))
+        if 35 < area < 200:
+            x, y, sw, sh = cv2.boundingRect(cnt)
+            aspect_ratio = float(sw)/sh
+            extent = float(area)/(sw*sh)
+            # The "Wide" Door Filter
+            if extent > 0.4 and 0.3 < aspect_ratio < 4.0:
+                exits.append((x + sw//2, y + sh//2))
 
     return player_pos, mobs, exits
 
-def wait_until_stopped(sct, monitor, player_pos):
-    """Returns True if stopped, False if stuck."""
+def wait_until_stopped(sct, monitor, player_pos, interrupt_if_mob=False):
+    """Returns True if stopped, False if stuck, or 'monster' if interrupted."""
     last_pos = player_pos
     last_move_time = time.time()
     stable_count = 0
     while stable_count < 5:
         if keyboard.is_pressed('esc'): return True
         time.sleep(0.05)
-        new_player, _, _ = get_vision_data(sct, monitor)
+        new_player, new_mobs, _ = get_vision_data(sct, monitor)
+        
+        # INTERRUPTION LOGIC: If we are walking to an exit and see a monster
+        if interrupt_if_mob and new_mobs:
+            print("\n[!] Monster spotted! Interrupting walk...")
+            return "monster"
+
         if new_player:
             if np.linalg.norm(np.array(new_player) - np.array(last_pos)) >= 1.5:
                 last_move_time = time.time()
@@ -195,56 +203,85 @@ def main():
                 continue
 
             # --- EXPLORATION LOGIC ---
-            print("No monsters. Scanning for exits...        ", end='\r')
+            print("No monsters. Scanning all exits...        ", end='\r')
+            # Filter exits that are not temporarily ignored
             available_exits = [e for e in exits if not any(np.linalg.norm(np.array(e)-np.array(i)) < 10 for i in ignored_exits)]
             
             if not available_exits:
                 time.sleep(1)
                 continue
 
-            target_exit = available_exits[0] # Pick nearest
-            sx, sy = ctrl.map_to_screen(target_exit[0], target_exit[1])
+            found_destinations = {} # {OCR_Name: (x,y)}
             
-            # Save debug
-            minimap_img = np.array(sct.grab(monitor))
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
-            cv2.imwrite(f"debug_scans/map_{timestamp}.png", minimap_img)
+            # 1. Scan ALL available doors
+            for target_exit in available_exits:
+                sx, sy = ctrl.map_to_screen(target_exit[0], target_exit[1])
+                
+                # Hover to read name
+                ctrl.moveTo(target_exit[0], target_exit[1], duration=0.3)
+                time.sleep(0.8)
 
-            ctrl.moveTo(target_exit[0], target_exit[1], duration=0.3)
-            time.sleep(0.8)
-
-            box = {"top": sy - 5, "left": sx + 25, "width": 300, "height": 40}
-            text = ocr.read_tooltip(box, save_path=f"debug_scans/scan_{timestamp}.png")
-            clean = clean_text(text)
-            print(f"Read Map Name: '{clean}'")
-
-            is_allowed = False
-            for allowed in ALLOWED_MAPS:
-                if allowed.lower() in clean.lower():
-                    is_allowed = True
-                    break
-            
-            if is_allowed:
-                if clean.lower() == last_map.lower():
-                    print(f"--> Ignoring {clean} (Just came from there).")
-                    ignored_exits[tuple(target_exit)] = time.time()
-                    ctrl.reset_mouse()
-                    time.sleep(2)
-                    continue
-
-                print(f"--> Entering {clean}!")
-                last_map = clean
-                ctrl.click_map(target_exit[0], target_exit[1])
-                ignored_exits[tuple(target_exit)] = time.time() - 40 
-                time.sleep(5)
-            else:
+                box = {"top": sy - 5, "left": sx + 25, "width": 300, "height": 40}
+                text = ocr.read_tooltip(box)
+                clean = clean_text(text)
+                
+                print(f"  OCR Result for door at {target_exit}: '{clean}'")
+                
                 if len(clean) > 2:
-                    print(f"--> Ignoring {clean} (Not in allow list)")
-                    ignored_exits[tuple(target_exit)] = time.time()
+                    found_destinations[clean] = target_exit
                 else:
-                    print(f"--> OCR Failed. Will retry.")
-                    ignored_exits[tuple(target_exit)] = time.time() - 55 
+                    # OCR Failed, ignore briefly so we can check others
+                    ignored_exits[tuple(target_exit)] = time.time() - 50 
+
+            # 2. Queue Priority Selection
+            selected_map_name = None
+            target_coords = None
+            
+            for map_name in ALLOWED_MAPS:
+                # Fuzzy match map name in found destinations
+                match_key = None
+                for found_name in found_destinations.keys():
+                    if map_name.lower() in found_name.lower():
+                        match_key = found_name
+                        break
+                
+                if match_key:
+                    selected_map_name = map_name
+                    target_coords = found_destinations[match_key]
+                    break # Found highest priority map!
+
+            # 3. Action & Queue Rotation
+            if selected_map_name:
+                print(f"--> Priority Match! Entering {selected_map_name}.")
+                
+                # Move this map to the END of the queue
+                ALLOWED_MAPS.remove(selected_map_name)
+                ALLOWED_MAPS.append(selected_map_name)
+                
+                ctrl.click_map(target_coords[0], target_coords[1])
+                # Blacklist this exit for 60s to prevent immediate turn-back
+                ignored_exits[tuple(target_coords)] = time.time()
+                
+                # Wait for arrival instead of static 5s
+                time.sleep(0.5) # Give time to start walking
+                # Set interrupt_if_mob=True so we stop if we see a target while walking
+                wait_result = wait_until_stopped(sct, monitor, player, interrupt_if_mob=True)
+                
+                if wait_result == "monster":
+                    print("--> Walk interrupted by monster. Switching to combat.")
+                elif not wait_result:
+                    print("--> Exploration path timed out or stuck.")
+                else:
+                    print("--> Arrived at exit area. Waiting for map load...")
+                    time.sleep(3) # Short wait for the black screen/loading
+            else:
+                print("--> No queue matches found. Waiting...")
                 ctrl.reset_mouse()
+                # Ignore the checked exits for 20s to look for monsters or other events
+                for coords in found_destinations.values():
+                    ignored_exits[tuple(coords)] = time.time() - 40
+                time.sleep(2)
+            continue
 
     cv2.destroyAllWindows()
 

@@ -33,6 +33,12 @@ This logic has been verified perfectly across 6 different minimap samples.
 *   **Coordinate Memory:** Blacklists every attacked spot for 10 minutes (600s) to handle map noise permanently.
 *   **Map Loop Prevention:** Tracks `last_map` and ignores the exit leading back for 60s.
 
+### **OCR Engine (The Reader)**
+*   **Preprocessing:** Grayscale -> 2x Resize (Cubic) -> Inverted Threshold (150).
+*   **Tesseract:** Configured for `--psm 3` (Fully automatic page segmentation) for maximum reliability on multi-word map names.
+*   **Language:** Polish + English (`pol+eng`).
+*   **Debug:** Timestamped tooltip crops saved to `debug_scans/` for accuracy verification.
+
 ## 5. Summary of Test Files
-*   `mini_map.png` through `mini_map_6.png` are the testing baseline.
-*   `processed_final_1.png` through `processed_final_6.png` are the perfect result logs.
+*   `mini_map.png` through `mini_map_9.png` are the testing baseline.
+*   `processed_final_1.png` through `processed_final_9.png` are the perfect result logs.
