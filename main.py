@@ -12,15 +12,13 @@ import json
 
 # --- Configuration ---
 ATTACK_RANGE = 12
-COOLDOWN = 0.5
-ALLOWED_MAPS = ["Kwieciste Kresy", "Krypty Bezsennych p1 s2", "Krypty Bezsennych p2 s2", "Krypty Bezsennych p2 s1", "Błota Sham Al", "Ruiny Tass Zhil", "Las Porywów Wiatru", "Głusza Świstu"]
+COOLDOWN = 0.5  
+ALLOWED_MAPS = ["Błota Sham AI","Kwieciste Kresy","Krypty Bezsennych p1 s1","Krypty Bezsennych p2 s1","Krypty Bezsennych p1 s2","Krypty Bezsennych p2 s2",  "Ruiny Tass Zhil", "Las Porywów Wiatru", "Głusza Świstu"]
 
 def clean_text(text):
     """Removes special characters and fixes common OCR errors (p.l -> p1)."""
     import re
-    # Fix common Tesseract errors found in location_tooltip samples
     text = text.replace(".l", "1").replace(".1", "1").replace(".2", "2").replace(".s", " s")
-    # Keep only alphanumeric and Polish chars
     return re.sub(r'[^a-zA-Z0-9ąęćłńóśźżĄĘĆŁŃÓŚŹŻ\s]', '', text).strip()
 
 def get_vision_data(sct, monitor):
@@ -56,25 +54,21 @@ def get_vision_data(sct, monitor):
     upper_red1 = np.array([10, 255, 255])
     lower_red2 = np.array([170, 70, 70])
     upper_red2 = np.array([180, 255, 255])
-    
     mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
     mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
     mask_mobs = cv2.bitwise_or(mask1, mask2)
-    # NO Morphological Closing for monsters to preserve square shape
 
     if player_pos:
-        # Mask out player area
         cv2.circle(mask_mobs, player_pos, 8, 0, -1) 
     
     contours_m, _ = cv2.findContours(mask_mobs, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     mobs = []
     for cnt in contours_m:
         area = cv2.contourArea(cnt)
-        if 30 < area < 150:
+        if 30 < area < 400:
             x, y, sw, sh = cv2.boundingRect(cnt)
             aspect_ratio = float(sw)/sh
             extent = float(area)/(sw*sh)
-            # The "Golden" Geometric Filter
             if extent > 0.4 and 0.7 <= aspect_ratio <= 1.4:
                 mobs.append((x + sw//2, y + sh//2))
 
@@ -88,17 +82,16 @@ def get_vision_data(sct, monitor):
     exits = []
     for cnt in contours_e:
         area = cv2.contourArea(cnt)
-        if 35 < area < 200:
+        if 35 < area < 400:
             x, y, sw, sh = cv2.boundingRect(cnt)
             aspect_ratio = float(sw)/sh
             extent = float(area)/(sw*sh)
-            # The "Wide" Door Filter
             if extent > 0.4 and 0.3 < aspect_ratio < 4.0:
                 exits.append((x + sw//2, y + sh//2))
 
     return player_pos, mobs, exits
 
-def wait_until_stopped(sct, monitor, player_pos, interrupt_if_mob=False):
+def wait_until_stopped(sct, monitor, player_pos, interrupt_if_mob=False, ignored_mobs=None):
     """Returns True if stopped, False if stuck, or 'monster' if interrupted."""
     last_pos = player_pos
     last_move_time = time.time()
@@ -108,10 +101,12 @@ def wait_until_stopped(sct, monitor, player_pos, interrupt_if_mob=False):
         time.sleep(0.05)
         new_player, new_mobs, _ = get_vision_data(sct, monitor)
         
-        # INTERRUPTION LOGIC: If we are walking to an exit and see a monster
+        # INTERRUPTION LOGIC: If we are walking to an exit and see a valid monster
         if interrupt_if_mob and new_mobs:
-            print("\n[!] Monster spotted! Interrupting walk...")
-            return "monster"
+            valid_mobs = [m for m in new_mobs if not any(np.linalg.norm(np.array(m)-np.array(i)) < 15 for i in (ignored_mobs or {}))]
+            if valid_mobs:
+                print("\n[!] Valid Monster spotted! Interrupting walk...")
+                return "monster"
 
         if new_player:
             if np.linalg.norm(np.array(new_player) - np.array(last_pos)) >= 1.5:
@@ -134,18 +129,17 @@ def main():
     current_target = None
     attack_count = 0
     last_map = ""
+    map_entry_time = 0
     last_heal_time = 0
     ignored_mobs = {} 
     ignored_exits = {} 
 
     # Load heal pixel if available
     heal_px = None
-    if "heal_pixel" in ctrl.region: # Checking the config through controller
-        heal_px = ctrl.region["heal_pixel"]
-    # Wait, Controller only loads map_region. Let's load full config here.
-    with open("config.json", "r") as f:
-        full_config = json.load(f)
-        heal_px = full_config.get("heal_pixel")
+    if os.path.exists("config.json"):
+        with open("config.json", "r") as f:
+            full_config = json.load(f)
+            heal_px = full_config.get("heal_pixel")
 
     with mss.mss() as sct:
         while True:
@@ -157,10 +151,8 @@ def main():
 
             # --- AUTO HEAL CHECK ---
             if heal_px:
-                # Check if heal is off cooldown
                 if now - last_heal_time > 1.5:
                     pixel_color = pyautogui.pixel(heal_px["x"], heal_px["y"])
-                    # If red channel is low or green is high, it's not red
                     if not (pixel_color[0] > 100 and pixel_color[1] < 100):
                         print(f"\n[!!!] LOW HEALTH detected ({pixel_color}). Healing!")
                         keyboard.press_and_release('3')
@@ -212,7 +204,7 @@ def main():
                     ctrl.click_map(current_target[0], current_target[1])
                     time.sleep(0.25)
                     
-                    if not wait_until_stopped(sct, monitor, player):
+                    if not wait_until_stopped(sct, monitor, player, ignored_mobs=ignored_mobs):
                         print(f"\n[!] Stuck! Blacklisting location.")
                         ignored_mobs[tuple(current_target)] = time.time()
                         current_target = None
@@ -229,86 +221,74 @@ def main():
 
             # --- EXPLORATION LOGIC ---
             print("No monsters. Scanning all exits...        ", end='\r')
-            # Filter exits that are not temporarily ignored
             available_exits = [e for e in exits if not any(np.linalg.norm(np.array(e)-np.array(i)) < 10 for i in ignored_exits)]
             
             if not available_exits:
+                if (now - map_entry_time < 10.0) and last_map:
+                    print(f"--> Nothing visible. Standing on spawn? Trying 'P' to return to {last_map}")
+                    keyboard.press_and_release('p')
+                    if last_map in ALLOWED_MAPS:
+                        ALLOWED_MAPS.remove(last_map); ALLOWED_MAPS.append(last_map)
+                    map_entry_time = now; time.sleep(5); continue
+                
                 time.sleep(1)
                 continue
 
-            found_destinations = {} # {OCR_Name: (x,y)}
-            
-            # 1. Scan ALL available doors
+            found_destinations = {}
             for target_exit in available_exits:
                 sx, sy = ctrl.map_to_screen(target_exit[0], target_exit[1])
-                
-                # Hover to read name
                 ctrl.moveTo(target_exit[0], target_exit[1], duration=0.3)
                 time.sleep(0.8)
-
                 box = {"top": sy - 5, "left": sx + 25, "width": 300, "height": 40}
                 text = ocr.read_tooltip(box)
                 clean = clean_text(text)
-                
                 print(f"  OCR Result for door at {target_exit}: '{clean}'")
-                
                 if len(clean) > 2:
                     found_destinations[clean] = target_exit
                 else:
-                    # OCR Failed, ignore briefly so we can check others
                     ignored_exits[tuple(target_exit)] = time.time() - 50 
 
-            # 2. Queue Priority Selection
             selected_map_name = None
             target_coords = None
-            
             for map_name in ALLOWED_MAPS:
-                # Fuzzy match map name: ignore spaces and case
                 search_target = map_name.lower().replace(" ", "")
-                
                 match_key = None
                 for found_name in found_destinations.keys():
                     if search_target in found_name.lower().replace(" ", ""):
                         match_key = found_name
                         break
-                
                 if match_key:
                     selected_map_name = map_name
                     target_coords = found_destinations[match_key]
                     break 
 
-            # 3. Action
             if selected_map_name:
                 print(f"--> Priority Match! Selected: {selected_map_name}.")
-                
                 ctrl.click_map(target_coords[0], target_coords[1])
-                # Blacklist this exit for 60s to prevent immediate turn-back
                 ignored_exits[tuple(target_coords)] = time.time()
-                
-                # Wait for arrival instead of static 5s
-                time.sleep(0.5) # Give time to start walking
-                # Set interrupt_if_mob=True so we stop if we see a target while walking
-                wait_result = wait_until_stopped(sct, monitor, player, interrupt_if_mob=True)
-                
+                time.sleep(0.5)
+                wait_result = wait_until_stopped(sct, monitor, player, interrupt_if_mob=True, ignored_mobs=ignored_mobs)
                 if wait_result == "monster":
                     print("--> Walk interrupted by monster. Switching to combat.")
-                    # If interrupted, remove from blacklist so we can try again after combat
                     if tuple(target_coords) in ignored_exits:
                         del ignored_exits[tuple(target_coords)]
                 elif not wait_result:
                     print("--> Exploration path timed out or stuck.")
                 else:
                     print(f"--> Arrived at exit for {selected_map_name}. Rotating queue...")
-                    # Move this map to the END of the queue ONLY NOW
-                    ALLOWED_MAPS.remove(selected_map_name)
-                    ALLOWED_MAPS.append(selected_map_name)
-                    
-                    print("--> Waiting for map load...")
-                    time.sleep(3) # Short wait for the black screen/loading
+                    ALLOWED_MAPS.remove(selected_map_name); ALLOWED_MAPS.append(selected_map_name)
+                    last_map = selected_map_name
+                    map_entry_time = time.time()
+                    print("--> Waiting for map load..."); time.sleep(3)
             else:
+                if (now - map_entry_time < 10.0) and last_map:
+                    print(f"--> No priority doors matched. Trying 'P' to return to {last_map}")
+                    keyboard.press_and_release('p')
+                    if last_map in ALLOWED_MAPS:
+                        ALLOWED_MAPS.remove(last_map); ALLOWED_MAPS.append(last_map)
+                    map_entry_time = now; time.sleep(5); continue
                 print("--> No queue matches found. Waiting...")
                 ctrl.reset_mouse()
-                # Ignore the checked exits for 20s to look for monsters or other events
                 for coords in found_destinations.values():
                     ignored_exits[tuple(coords)] = time.time() - 40
                 time.sleep(2)

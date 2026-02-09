@@ -49,7 +49,6 @@ def run_vision():
             mask_mobs = cv2.bitwise_or(cv2.inRange(hsv, lower_red1, upper_red1), 
                                        cv2.inRange(hsv, lower_red2, upper_red2))
             
-            # Show raw monster mask BEFORE player masking
             cv2.imshow("Monster Mask (Raw Red)", mask_mobs)
 
             if player_pos:
@@ -58,7 +57,8 @@ def run_vision():
             cnts_m, _ = cv2.findContours(mask_mobs, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             for cnt in cnts_m:
                 area = cv2.contourArea(cnt)
-                if 30 < area < 150:
+                # Broad Area for small locations
+                if 20 < area < 400:
                     x, y, sw, sh = cv2.boundingRect(cnt)
                     aspect_ratio = float(sw)/sh
                     extent = float(area)/(sw*sh)
@@ -71,13 +71,13 @@ def run_vision():
             mask_doors = cv2.inRange(hsv, lower_blue, upper_blue)
             mask_doors = cv2.morphologyEx(mask_doors, cv2.MORPH_CLOSE, kernel)
             
-            # Show raw door mask
             cv2.imshow("Door Mask (Raw Blue)", mask_doors)
 
             cnts_d, _ = cv2.findContours(mask_doors, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             for cnt in cnts_d:
                 area = cv2.contourArea(cnt)
-                if 35 < area < 200:
+                # Broad Area for small locations
+                if 30 < area < 400:
                     x, y, sw, sh = cv2.boundingRect(cnt)
                     aspect_ratio = float(sw)/sh
                     extent = float(area)/(sw*sh)
