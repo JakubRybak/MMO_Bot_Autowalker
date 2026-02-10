@@ -8,5 +8,11 @@
     "heal_pixel": {
         "x": 990,
         "y": 961
+    },
+    "bag_region": {
+        "top": 398,
+        "left": 1848,
+        "width": 21,
+        "height": 17
     }
 }
