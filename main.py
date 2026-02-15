@@ -15,13 +15,14 @@ import ocr
 # Modular Scripts
 from scripts.vision_engine import get_vision_data, clean_text
 from scripts.movement import wait_until_stopped
-from scripts.routines import perform_selling_routine, perform_return_routing
+from scripts.routines import perform_selling_routine, perform_return_routing, perform_death_recovery
 
 # --- Configuration ---
 ATTACK_RANGE = 12
-ALLOWED_MAPS = ["Kwieciste Kresy", "Błota Sham", "Krypty Bezsennych p1 s1", "Krypty Bezsennych p1 s2", "Grota Arbor s1", "Grota Arbor s2", "Krypty Bezsennych p2 s1", "Krypty Bezsennych p2 s2", "Ruiny Tass Zhil", "Las Porywów Wiatru", "Głusza Świstu"]
+ALLOWED_MAPS = ["Kwieciste Kresy", "Błota Sham", "Krypty Bezsennych p1 s1", "Krypty Bezsennych p1 s2", "Grota Arbor s1", "Grota Arbor s2", "Krypty Bezsennych p2 s1", "Krypty Bezsennych p2 s2", "Ruiny Tass", "Las Porywów", "Głusza"]
 
 def main():
+    pyautogui.FAILSAFE = False
     ctrl = Controller()
     monitor = {"top": ctrl.region["top"], "left": ctrl.region["left"], 
                "width": ctrl.region["width"], "height": ctrl.region["height"]}
@@ -30,6 +31,9 @@ def main():
     
     current_target = None
     attack_count = 0
+    stuck_count = 0 
+    no_match_count = 0 
+    p_pressed = False # New flag to prevent infinite P-loops
     last_map = ""
     map_entry_time = time.time()
     last_heal_time = 0
@@ -59,8 +63,20 @@ def main():
                     keyboard.press_and_release('3')
                     last_heal_time = now
 
-            # --- 2. BAG FULL CHECK ---
-            if bag_reg:
+            player, mobs, exits = get_vision_data(sct, monitor)
+            
+            # --- 2. SURVIVAL CHECK ---
+            if player is None:
+                # If player is missing, it's a strong sign of death/black screen
+                no_match_count += 1
+                if no_match_count >= 5:
+                    perform_death_recovery(sct, monitor, ctrl, heal_px=heal_px)
+                    no_match_count = 0; map_entry_time = time.time(); p_pressed = False
+                time.sleep(1); continue
+
+            # --- 3. BAG FULL CHECK ---
+            # Only check bags if we aren't currently "lost" or "dead" (count is 0)
+            if bag_reg and no_match_count == 0:
                 bag_mon = {"top": bag_reg["top"], "left": bag_reg["left"], 
                            "width": bag_reg["width"], "height": bag_reg["height"]}
                 bag_img = np.array(sct.grab(bag_mon))
@@ -74,17 +90,15 @@ def main():
                     print(f"\n[!!!] BAGS FULL ({bag_text} left). Moving to sell...")
                     perform_selling_routine(ctrl)
                     p_now, _, _ = get_vision_data(sct, monitor)
-                    perform_return_routing(sct, monitor, ctrl, p_now)
+                    perform_return_routing(sct, monitor, ctrl, p_now, heal_px=heal_px)
                     map_entry_time = time.time()
+                    no_match_count = 0; p_pressed = False 
                     continue
 
-            player, mobs, exits = get_vision_data(sct, monitor)
-            if player is None:
-                time.sleep(0.5); continue
-
-            # --- 3. COMBAT LOGIC ---
+            # --- 4. COMBAT LOGIC ---
             available_mobs = [m for m in mobs if not any(np.linalg.norm(np.array(m)-np.array(i)) < 15 for i in ignored_mobs)]
             if available_mobs:
+                no_match_count = 0 # Reset because we found monsters
                 if current_target:
                      found_locked = None
                      for m in available_mobs:
@@ -95,51 +109,50 @@ def main():
                     mobs_arr = np.array(available_mobs)
                     distances = np.linalg.norm(mobs_arr - player, axis=1)
                     current_target = available_mobs[np.argmin(distances)]
-                    attack_count = 0
-                    print(f"\nLocked Mob: {current_target}")
+                    attack_count = 0; print(f"\nLocked Mob: {current_target}")
 
                 dist = np.linalg.norm(np.array(current_target) - np.array(player))
                 if dist <= ATTACK_RANGE:
                     attack_count += 1
                     print(f"Attacking! (Count: {attack_count}/3)")
                     ctrl.attack(); time.sleep(1.5)
-                    
                     if attack_count >= 3:
-                        print(f"Blacklisting coordinate {current_target} for 10 min.")
                         ignored_mobs[tuple(current_target)] = now
-                        current_target = None
-                        attack_count = 0
-                    
+                        current_target = None; attack_count = 0
                     time.sleep(random.uniform(0.1, 0.4)); continue
                 else:
                     print(f"Approaching Mob... (Dist: {dist:.1f})", end='\r')
                     ctrl.click_map(current_target[0], current_target[1]); time.sleep(0.25)
                     if not wait_until_stopped(sct, monitor, player, ignored_mobs=ignored_mobs):
-                        ignored_mobs[tuple(current_target)] = now; current_target = None
+                        stuck_count += 1
+                        if stuck_count >= 2:
+                            ignored_mobs[tuple(current_target)] = now
+                            current_target = None; stuck_count = 0
+                        else: current_target = None 
                     else:
-                        print("Arrived! Waiting 1.2s...")
-                        time.sleep(1.2)
-                        print(f"Attacking once (Count: {attack_count + 1}/3)...")
+                        print("Arrived!"); time.sleep(1.2)
                         ctrl.attack(); time.sleep(1.5)
-                        attack_count += 1
-                        
-                        if attack_count >= 3:
-                            ignored_mobs[tuple(current_target)] = now; current_target = None
-                            attack_count = 0
-                        
-                        time.sleep(random.uniform(0.1, 0.4))
+                        ignored_mobs[tuple(current_target)] = now; current_target = None; stuck_count = 0
                 continue
 
             # --- 4. EXPLORATION LOGIC ---
             print("No monsters. Scanning all exits...        ", end='\r')
             available_exits = [e for e in exits if not any(np.linalg.norm(np.array(e)-np.array(i)) < 10 for i in ignored_exits)]
             if not available_exits:
-                if (now - map_entry_time < 10.0) and last_map:
-                    print(f"--> Nothing visible. Trying 'P' to return to {last_map}")
+                # 1. 'P' Fallback (Only ONCE per entry)
+                if (now - map_entry_time < 10.0) and last_map and not p_pressed:
+                    print(f"--> Nothing visible. Trying 'P' once to return to {last_map}")
                     keyboard.press_and_release('p')
-                    if last_map in ALLOWED_MAPS:
-                        ALLOWED_MAPS.remove(last_map); ALLOWED_MAPS.append(last_map)
-                    map_entry_time = now; time.sleep(5); continue
+                    p_pressed = True # Prevent infinite P-loop
+                    time.sleep(5); continue
+                
+                # 2. Death detection (Only AFTER safety window)
+                if (now - map_entry_time >= 10.0):
+                    no_match_count += 1
+                    if no_match_count >= 5:
+                        perform_death_recovery(sct, monitor, ctrl, heal_px=heal_px)
+                        no_match_count = 0; map_entry_time = time.time(); p_pressed = False
+                        continue
                 time.sleep(1); continue
 
             found_destinations = {}
@@ -162,6 +175,7 @@ def main():
                     selected_map_name = map_name; target_coords = found_destinations[match_key]; break 
 
             if selected_map_name:
+                no_match_count = 0 
                 print(f"--> Priority Match! Selected: {selected_map_name}.")
                 ctrl.click_map(target_coords[0], target_coords[1])
                 ignored_exits[tuple(target_coords)] = now; time.sleep(0.5)
@@ -174,15 +188,24 @@ def main():
                 else:
                     print(f"--> Arrived at {selected_map_name}. Rotating queue...")
                     ALLOWED_MAPS.remove(selected_map_name); ALLOWED_MAPS.append(selected_map_name)
-                    last_map = selected_map_name; map_entry_time = now
-                    time.sleep(3)
+                    last_map = selected_map_name
+                    print("--> Waiting for map load..."); time.sleep(3)
+                    map_entry_time = time.time(); no_match_count = 0; p_pressed = False
             else:
-                if (now - map_entry_time < 10.0) and last_map:
-                    print(f"--> No matches. Trying 'P' to return to {last_map}")
+                # 1. 'P' Fallback (Only ONCE per entry)
+                if (now - map_entry_time < 10.0) and last_map and not p_pressed:
+                    print(f"--> No matches. Trying 'P' once to return to {last_map}")
                     keyboard.press_and_release('p')
-                    if last_map in ALLOWED_MAPS:
-                        ALLOWED_MAPS.remove(last_map); ALLOWED_MAPS.append(last_map)
-                    map_entry_time = now; time.sleep(5); continue
+                    p_pressed = True 
+                    time.sleep(5); continue
+
+                # 2. Death detection
+                if (now - map_entry_time >= 10.0):
+                    no_match_count += 1
+                    if no_match_count >= 5:
+                        perform_death_recovery(sct, monitor, ctrl, heal_px=heal_px)
+                        no_match_count = 0; map_entry_time = time.time(); p_pressed = False
+                        continue
                 ctrl.reset_mouse()
                 for coords in found_destinations.values(): ignored_exits[tuple(coords)] = now - 40
                 time.sleep(2)

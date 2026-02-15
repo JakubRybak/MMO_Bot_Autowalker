@@ -35,8 +35,10 @@ class Controller:
 
     def reset_mouse(self):
         """Moves mouse slightly outside the map area to clear tooltips."""
-        # Move to Top-Left corner of the map window minus a few pixels
-        pyautogui.moveTo(self.region["left"] - 15, self.region["top"] - 15)
+        # Ensure we stay in positive screen space
+        safe_x = max(5, self.region["left"] - 15)
+        safe_y = max(5, self.region["top"] - 15)
+        pyautogui.moveTo(safe_x, safe_y)
 
     def attack(self):
         """Simulates the attack key."""

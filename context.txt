@@ -1,72 +1,36 @@
-# THE MARGONEM MINIMAP HUNTER - COMPREHENSIVE PROJECT BIBLE
+# THE MARGONEM MINIMAP HUNTER - MODULAR PROJECT BIBLE
 
-## 1. CORE PHILOSOPHY & CONSTRAINTS
-*   **100% External Automation:** The bot operates strictly via screen capture (MSS) and input simulation (PyAutoGUI/Keyboard). It does NOT read memory or inject packets.
-*   **Vision-First Intelligence:** Decisions are made by analyzing the "Podręczna Mapa" (Minimap). If a human can't see it on the minimap, the bot doesn't know it exists.
-*   **Robustness over Speed:** Logic includes deliberate delays (1.2s - 1.5s) to account for server-client sync, animations, and anti-cheat patterns.
+## 1. CORE ARCHITECTURE
+The project has been refactored into a modular structure for better maintainability and testing.
 
-## 2. THE VISION ENGINE: THE "GEOMETRIC SOLUTION"
-Through extensive testing across 9 map samples, we established a "Geometric standard" that separates interactive game objects from static map decorations.
+*   **`main.py`**: The central orchestrator. Manages the state machine (Hunting vs. Selling vs. Returning) and handles the main bot loop.
+*   **`scripts/vision_engine.py`**: The "Eyes". Contains all OpenCV detection logic for monsters, doors, and player positions. Also handles OCR text cleaning.
+*   **`scripts/movement.py`**: Handles character stability and interruptible travel logic (`wait_until_stopped`).
+*   **`scripts/routines.py`**: High-level macros for "Full Bag" selling and "Recovery" return paths.
+*   **`controls.py`**: Hardware abstraction layer for mouse/keyboard simulation.
+*   **`ocr.py`**: Low-level Tesseract engine configuration.
 
-### A. Monster Detection (Target: Red Squares/Dots)
-*   **The Problem:** Maps have red carpets, blood, and banners that trigger broad color masks.
-*   **The Solution:** 
-    *   **Color (Dual Mask):** Captures Hue 0-10 and 170-180. The floor for Saturation and Value is set to **70**. This "Relaxed S/V" handles monsters in shadows or dark caves where red becomes "brownish."
-    *   **Geometry:** Area (30 to 400px), Aspect Ratio (0.7 to 1.4), Extent (> 0.40). 
-    *   **Crucial Constraint:** We DO NOT use Morphological Closing on monsters. Closing "smudges" the sharp square edges, making them fail the 0.7-1.4 Aspect Ratio check.
-    *   **Player Masking:** A black circle (radius 8) is drawn over the player's position in the mask. This prevents the bot's cyan dot from "eating" or "hiding" a monster it is standing on.
+## 2. STANDARDIZED VISION SETTINGS
+These parameters have been verified across 10+ map samples and represent the "Absolute Perfect" baseline.
 
-### B. Door Detection (Target: Blue Square Entries)
-*   **The Problem:** Doors on the edges of the map get "squashed" into long rectangles. Pixels are often fragmented or faint.
-*   **The Solution:**
-    *   **Color:** Precision Vivid Blue (Hue 110-125, S > 100, V > 100). This specifically filters out the dark/vivid false doors (see `archive_tests/door_bad.png`).
-    *   **Geometry:** Area (35 to 400px), Extent (> 0.40), **Broad Aspect Ratio (0.3 to 4.0)**. This wide range is critical for detecting doors that appear as thin horizontal or vertical lines on the very edge of the minimap.
-    *   **Morphology:** Uses `cv2.MORPH_CLOSE` (3x3 kernel). This "pixel bridge" joins fragmented blue pixels into a solid detectable block.
+### **Monster Detection (Red)**
+*   **Filters:** Hue 0-10 & 170-180, S/V > 70.
+*   **Geometry:** Area 30-400px, Extent > 0.4, Aspect 0.7-1.4.
+*   **Constraint:** Clean edges (No morphological closing). Player masking (8px radius) is used to prevent self-overlap.
 
-## 3. BRAIN LOGIC & NAVIGATION
-### A. The Priority Queue (`ALLOWED_MAPS`)
-*   The bot treats the `ALLOWED_MAPS` list as a rotating priority queue.
-*   It hovers over **every** visible door, reads the name via OCR, and builds a "found destinations" map.
-*   It enters the door leading to the map closest to the **front** of the queue.
-*   **Rotation:** A map name is moved to the **back** of the list ONLY after the character successfully arrives at the door coordinates.
+### **Door Detection (Blue)**
+*   **Filters:** Hue 110-125, **Saturation > 150, Value > 150**. (Very strict to ignore map noise).
+*   **Geometry:** Area 20-600px, **Extent > 0.50**.
+*   **Processing:** Uses `MORPH_CLOSE` (3x3 kernel). Verified to detect exactly **1 door** in Map 3 and ignore all noise.
 
-### B. Interruptible Movement
-*   The function `wait_until_stopped` monitors the player's dot movement.
-*   **Combat Walk:** Ignores interruptions to ensure it reaches the monster.
-*   **Exploration Walk:** Has `interrupt_if_mob=True`. If a valid (non-blacklisted) monster appears on the minimap while the bot is walking to a door, the walk is cancelled immediately, and the bot switches to Combat Mode.
+## 3. ADVANCED FEATURES
+*   **Queue Navigation:** `ALLOWED_MAPS` acts as a priority queue. Maps are rotated to the end only upon confirmed arrival at a destination.
+*   **Interruptible Travel:** When exploring, the bot will immediately cancel a walk to a door if a valid monster appears.
+*   **'P' Key Strategy:** Automatic fallback to return via 'P' if spawned on a hidden door with no other visible targets.
+*   **Auto-Heal:** Single-pixel monitor on the health orb with a 0.5s rapid-fire cooldown for deep health drops.
+*   **Auto-Selling:** Detects 0-1 free slots -> Teleports -> Enters "Dom Tunii" -> Executes Trade Macro -> Returns to farm zone via fixed `RECOVERY_ROUTE`.
 
-### C. The 'P' Key "Ghost Door" Strategy
-*   **Scenario:** The bot enters a map and spawns exactly on top of the door. The door is hidden under the player's dot. No other monsters or doors are visible.
-*   **Action:** If `mobs` and `exits` are empty within the first 10 seconds of map entry, the bot presses **'P'** (standard Margonem "Use/Enter" key).
-*   **Logic:** It assumes it came from `last_map`, so it rotates `last_map` to the end of the queue to keep the cycle in sync.
-
-## 4. COMBAT & SURVIVAL
-### A. Coordinate Memory (The "Decoration Killer")
-*   To prevent the bot from attacking red map decorations (carpets/statues), every coordinate that is clicked for an attack is blacklisted for **10 minutes (600s)**.
-*   Since real monsters take ~15 minutes to respawn, this memory perfectly "silences" the map noise without losing real kills.
-
-### B. Precision Combat Timing
-1.  **Arrival:** Clicks map -> waits 0.25s for movement to start -> `wait_until_stopped`.
-2.  **Strike:** Arrives -> waits **1.2s** (to allow the game to register the position) -> presses **'Q'**.
-3.  **Sync:** Waits **1.5s** after 'Q' to let the monster dot disappear from the minimap before the next scan.
-
-### C. Simple Auto-Heal
-*   The bot looks at one **specific pixel** (calibrated via `setup_simple_heal.py`) on the health orb.
-*   **Trigger:** If the pixel color is NOT Red (R < 100 or G > 100), it presses **'3'** (Heal Potion).
-*   **Cooldown:** 1.5s between heals to prevent spam.
-
-## 5. OCR ENGINE (THE READER)
-Optimized for the thin, shadowed fonts used in browser tooltips.
-*   **Pipeline:** Grayscale -> **3x Resize (Cubic Interpolation)** -> Threshold (180). 
-*   **Tesseract:** Configured for `--psm 6` (Uniform block of text).
-*   **Cleaning:** `clean_text` uses Regex to remove noise and a dictionary fix for common errors (e.g., misreading "p1" as "p.l" or "p.1"). It also strips spaces during map comparison to ensure "p1s1" matches "p1 s1".
-
-## 6. WORKSPACE ORGANIZATION
-*   **`archive_scripts/`**: Contains legacy analysis tools (Exact color finders, standalone door/monster testers).
-*   **`archive_tests/`**: Contains the 9 `mini_map_X.png` samples and their `processed_final_X.png` result logs.
-*   **`debug_scans/`**: (Optional) Can be used to save screenshots if the user re-enables the `save_path` in `main.py`.
-
-## 7. FUTURE DEVELOPMENT GOALS
-1.  **Auto-Selling:** Detect full inventory via pixel check -> follow a fixed queue of maps to a vendor -> run a "Trade Macro" -> return to the farming zone.
-2.  **Death Recovery:** Detect the "Graveyard" map -> follow a specific map queue to return to the active farming loop.
-3.  **Directed Pathing:** Implementation of a State Machine (HUNTING, SELLING, RECOVERING) to allow the bot to ignore monsters when it has a specific destination goal.
+## 4. OCR OPTIMIZATION
+*   **Preprocessing:** Grayscale -> 3x Cubic Resize -> High Threshold (180).
+*   **Engine:** PSM 6 (Single block).
+*   **Fuzzy Matching:** Matching logic ignores all spaces and capitalization (e.g., "p1s1" == "P1 S1").

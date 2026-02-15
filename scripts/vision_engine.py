@@ -1,5 +1,20 @@
 import cv2
 import numpy as np
+import os
+import glob
+
+# --- Load Templates at Startup ---
+MONSTER_TEMPLATES = []
+for f in glob.glob("monster_templates/*.png"):
+    t = cv2.imread(f)
+    if t is not None:
+        MONSTER_TEMPLATES.append(t)
+
+DOOR_TEMPLATES = []
+for f in glob.glob("doors_templates/*.png"):
+    t = cv2.imread(f)
+    if t is not None:
+        DOOR_TEMPLATES.append(t)
 
 def clean_text(text):
     """Removes special characters and fixes common OCR errors."""
@@ -8,13 +23,12 @@ def clean_text(text):
     return re.sub(r'[^a-zA-Z0-9ąęćłńóśźżĄĘĆŁŃÓŚŹŻ\s]', '', text).strip()
 
 def get_vision_data(sct, monitor):
-    """Captures screen and returns player position, monsters, exits."""
+    """Captures screen and returns player position, monsters, exits using Template Matching."""
     img = np.array(sct.grab(monitor))
     frame = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    kernel = np.ones((3,3), np.uint8)
 
-    # 1. Player Dot
+    # 1. Player Dot (Keep Color-based detection as it is unique and works well)
     lower_cyan = np.array([80, 100, 200])
     upper_cyan = np.array([100, 255, 255])
     mask_cyan = cv2.inRange(hsv, lower_cyan, upper_cyan)
@@ -35,44 +49,26 @@ def get_vision_data(sct, monitor):
                 player_pos = (x + w//2, y + h//2)
                 break
 
-    # 2. Monsters (Red/Orange) - Absolute Perfect Geometric Match
-    lower_red1 = np.array([0, 70, 70])
-    upper_red1 = np.array([10, 255, 255])
-    lower_red2 = np.array([170, 70, 70])
-    upper_red2 = np.array([180, 255, 255])
-    mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
-    mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
-    mask_mobs = cv2.bitwise_or(mask1, mask2)
-
-    if player_pos:
-        cv2.circle(mask_mobs, player_pos, 8, 0, -1) 
-    
-    contours_m, _ = cv2.findContours(mask_mobs, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # 2. Monsters (Template Matching - Threshold 0.95)
     mobs = []
-    for cnt in contours_m:
-        area = cv2.contourArea(cnt)
-        if 30 < area < 400:
-            x, y, sw, sh = cv2.boundingRect(cnt)
-            aspect_ratio = float(sw)/sh
-            extent = float(area)/(sw*sh)
-            if extent > 0.4 and 0.7 <= aspect_ratio <= 1.4:
-                mobs.append((x + sw//2, y + sh//2))
+    for template in MONSTER_TEMPLATES:
+        th, tw = template.shape[:2]
+        res = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
+        loc = np.where(res >= 0.95)
+        for pt in zip(*loc[::-1]):
+            # Proximity check
+            if not any(abs(pt[0] - m[0]) < 10 and abs(pt[1] - m[1]) < 10 for m in mobs):
+                mobs.append((pt[0] + tw//2, pt[1] + th//2))
 
-    # 3. Exits (Blue Squares) - Absolute Perfect Geometric Match
-    lower_blue = np.array([110, 100, 100])
-    upper_blue = np.array([125, 255, 255])
-    mask_doors = cv2.inRange(hsv, lower_blue, upper_blue)
-    mask_doors = cv2.morphologyEx(mask_doors, cv2.MORPH_CLOSE, kernel)
-    
-    contours_e, _ = cv2.findContours(mask_doors, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # 3. Exits (Template Matching - Threshold 0.98)
     exits = []
-    for cnt in contours_e:
-        area = cv2.contourArea(cnt)
-        if 35 < area < 400:
-            x, y, sw, sh = cv2.boundingRect(cnt)
-            aspect_ratio = float(sw)/sh
-            extent = float(area)/(sw*sh)
-            if extent > 0.4 and 0.3 < aspect_ratio < 4.0:
-                exits.append((x + sw//2, y + sh//2))
+    for template in DOOR_TEMPLATES:
+        th, tw = template.shape[:2]
+        res = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
+        loc = np.where(res >= 0.98)
+        for pt in zip(*loc[::-1]):
+            # Proximity check
+            if not any(abs(pt[0] - e[0]) < 15 and abs(pt[1] - e[1]) < 15 for e in exits):
+                exits.append((pt[0] + tw//2, pt[1] + th//2))
 
     return player_pos, mobs, exits
